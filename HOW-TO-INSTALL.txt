@@ -53,5 +53,5 @@ the Start menu and on the taskbar, opens in its own window, and works offline.
 UPDATING THE APP LATER
 ------------------------------------------------------------
  Upload the new index.html to the repo (replace the old one), and in sw.js
- change VERSION = 'diesel-v11' to 'diesel-v12' (then v3, ...). The installed
+ change VERSION = 'diesel-v12' to 'diesel-v13' (then v3, ...). The installed
  app picks up the new version the next time it opens with internet.

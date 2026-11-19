@@ -220,8 +220,9 @@ code{background:var(--panel2);padding:1px 5px;border-radius:5px}
       <div class="card" style="max-width:560px">
         <h3>Waiting for approval</h3>
         <p class="cap" id="pendCap">Your account has been created. The admin needs to approve it before you can see the diesel data. This page opens by itself once you're approved.</p>
+        <p class="cap" id="pendState"></p>
         <p class="cap" id="pendId"></p>
-        <div class="formrow"><button class="btn ghost" id="pendOut">Sign out</button></div>
+        <div class="formrow"><button class="btn small" id="pendRetry">Send request again</button><button class="btn ghost" id="pendOut">Sign out</button></div>
       </div>
     </div>
     <div class="banner" id="errBanner" hidden></div>
@@ -498,8 +499,14 @@ const Store={mode:'local',user:null,entries:{},settings:{},err:null,loaded:false
   pending(){return this.mode==='firebase'&&!!this.user&&!!this.settingsLoaded&&!this.approved();},
   sync(){
     if(this.approved()&&!this.monthsOn){this.monthsOn=true;this.startMonths();}
-    if(this.pending()&&this._reqSent!==this.user.uid){this._reqSent=this.user.uid;this.db.collection(REQUESTS).doc(this.user.uid).set({email:this.user.email||'',at:Date.now()},{merge:true}).catch(()=>{});}
-    if(this.isAdmin()&&!this.reqUnsub){this.reqUnsub=this.db.collection(REQUESTS).onSnapshot(sn=>{const r={};sn.forEach(d=>r[d.id]=d.data());this.requests=r;if(S.page==='settings')render();},()=>{});this.unsubs.push(this.reqUnsub);}
+    if(this.pending()&&this._reqSent!==this.user.uid){this._reqSent=this.user.uid;this.sendRequest();}
+    if(this.isAdmin()&&!this.reqUnsub){this.reqUnsub=this.db.collection(REQUESTS).onSnapshot(sn=>{const r={};sn.forEach(d=>r[d.id]=d.data());this.requests=r;this.reqErr=null;if(S.page==='settings')render();},err=>{this.reqErr=err.message;if(S.page==='settings')render();});this.unsubs.push(this.reqUnsub);}
+  },
+  sendRequest(){
+    this.reqState='sending';onData();
+    return this.db.collection(REQUESTS).doc(this.user.uid).set({email:this.user.email||'',at:Date.now()},{merge:true})
+      .then(()=>{this.reqState='sent';this.reqErr2=null;onData();})
+      .catch(e=>{this.reqState='failed';this.reqErr2=e.message;onData();});
   },
   startMonths(){
     this.unsubs.push(this.db.collection(MONTHS).onSnapshot(snap=>{const e={};snap.forEach(doc=>{const r=(doc.data()||{}).r||{};for(const[k,v]of Object.entries(r))e[k]=v;});this.entries=e;this.loaded=true;this.err=null;onData();},
@@ -761,6 +768,7 @@ function render(){
   document.querySelectorAll('.fac:not(.pg)').forEach(b=>b.classList.toggle('on',(b.dataset.f||null)===S.fac));
   const eb=document.getElementById('errBanner');eb.hidden=!(Store.err&&!lk&&S.page!=='record');if(!eb.hidden)eb.textContent=Store.err;
   document.body.classList.toggle('locked',lk);
+  if(pend){const ps=document.getElementById('pendState');ps.style.color=Store.reqState==='failed'?'var(--bad)':'';ps.textContent=Store.reqState==='sent'?'✓ Your request has reached the admin.':Store.reqState==='failed'?'Your request could not be sent: '+Store.reqErr2+' (the admin needs to update the Firestore rules).':'Sending your request…';}
   if(pend)setText('pendId','If the admin can\'t find you, send them your account ID: '+Store.user.uid);
   if(lk){setText('crumb',pend?'Account':'Welcome');setText('title','Vestates diesel');setText('sub',pend?'Signed in as '+(Store.user&&Store.user.email||''):'Sign in or create an account to continue');return;}
   if(empty){setText('title',S.fac||'All facilities');setText('sub','');return;}
@@ -975,7 +983,8 @@ function renderSettings(){
   if(!ps.hidden){const st=Store.settings||{},viewers=st.viewers||[],emails=st.viewerEmails||{},req=Store.requests||{};
     const rows=[...Object.entries(req).filter(([u])=>!viewers.includes(u)&&u!==ADMIN_UID).map(([u,v])=>({u,email:v.email,st:'pending'})),...viewers.map(u=>({u,email:emails[u]||(req[u]&&req[u].email)||u,st:'ok'}))];
     const tb=document.querySelector('#peopleTable tbody');
-    if(!rows.length){const tr=document.createElement('tr'),td=document.createElement('td');td.colSpan=3;td.style.color='var(--mut)';td.textContent='No one waiting. People appear here after they create an account and sign in on the latest version of the app. If someone made their account another way (or before this update), copy their User UID from Firebase → Authentication → Users and add them above.';tr.appendChild(td);tb.replaceChildren(tr);}
+    if(Store.reqErr){const tr=document.createElement('tr'),td=document.createElement('td');td.colSpan=3;td.style.color='var(--bad)';td.textContent='Could not load waiting requests: '+Store.reqErr+'. Publish the latest Firestore rules (they include diesel_requests), then refresh.';tr.appendChild(td);tb.replaceChildren(tr);}
+    else if(!rows.length){const tr=document.createElement('tr'),td=document.createElement('td');td.colSpan=3;td.style.color='var(--mut)';td.textContent='No one waiting. People appear here after they create an account and sign in on the latest version of the app. If someone made their account another way (or before this update), copy their User UID from Firebase → Authentication → Users and add them above.';tr.appendChild(td);tb.replaceChildren(tr);}
     else tb.replaceChildren(...rows.map(p=>{const tr=document.createElement('tr');const c=v=>{const td=document.createElement('td');if(v instanceof Node)td.appendChild(v);else td.textContent=v;tr.appendChild(td);return td;};
       c(p.email||'—');c(tag(p.st==='ok'?'Can view':'Waiting for approval',p.st==='ok'?'ok':'warn'));
       const box=document.createElement('span');box.style.display='inline-flex';box.style.gap='8px';
@@ -1056,6 +1065,7 @@ document.getElementById('addBtn').onclick=async()=>{const m=document.getElementB
   if(!/^[A-Za-z0-9]{20,40}$/.test(uid)){m.textContent='Paste the User UID exactly as shown in Firebase (letters and numbers, about 28 long).';return;}
   if(uid===ADMIN_UID){m.textContent='That is your own account; you already have full access.';return;}
   const st=Store.settings||{};try{await Store.saveSettings({viewers:[...new Set([...(st.viewers||[]),uid])],viewerEmails:{...(st.viewerEmails||{}),[uid]:em||uid}});m.textContent='Done. They can now sign in and view.';document.getElementById('addUid').value='';document.getElementById('addEmail').value='';render();}catch(e){m.textContent='Could not save: '+e.message;}};
+document.getElementById('pendRetry').onclick=()=>Store.user&&Store.sendRequest();
 document.getElementById('pendOut').onclick=()=>{document.getElementById('siPass').value='';Store.auth&&Store.auth.signOut();};
 document.getElementById('acctOut').onclick=()=>{const pw=document.getElementById('siPass');if(pw)pw.value='';Store.auth&&Store.auth.signOut();};
 document.getElementById('fbSave').onclick=()=>{const m=document.getElementById('fbMsg');try{const o=parseCfg(document.getElementById('fbCfg').value);LS.set('dz_fb_cfg',o);m.textContent='Saved. Reloading…';setTimeout(()=>location.reload(),600);}catch(e){m.textContent=e.message;}};
