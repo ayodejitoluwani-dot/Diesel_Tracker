@@ -1,5 +1,5 @@
 // Keeps the app working offline. Bump VERSION whenever you upload a new index.html.
-const VERSION = 'diesel-v9';
+const VERSION = 'diesel-v11';
 const CORE = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png', './favicon.png'];
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(VERSION).then(c => c.addAll(CORE)).then(() => self.skipWaiting()));
