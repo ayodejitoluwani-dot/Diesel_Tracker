@@ -120,10 +120,13 @@ details summary{cursor:pointer}
 @media print{body{background:#0a0c0b;-webkit-print-color-adjust:exact;print-color-adjust:exact}.side{position:static;height:auto}}
 #recBody{display:flex;flex-direction:column;gap:20px}#recBody[hidden]{display:none}
 .dd-stack{display:flex;flex-direction:column;gap:20px}
-.fac[hidden]{display:none}
+.fac[hidden],.acct[hidden],.seg[hidden]{display:none}
 .acct{display:flex;justify-content:space-between;align-items:center;gap:8px;background:var(--panel2);border-radius:14px;padding:10px 12px}
 .acct b{display:block;font-size:13px}.acct b.view{color:var(--teal)}.acct b.adm{color:var(--lime)}.acct small{display:block;color:var(--mut);font-size:11px;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 body.viewer #base{pointer-events:none;opacity:.6}
+.authform{display:flex;flex-direction:column;gap:10px}.authform input{width:100%}
+.authform .btn{align-self:flex-start}
+body.locked .side h4,body.locked .facs,body.locked .side .note,body.locked #installBtn,body.locked details.card,body.locked #basis{display:none!important}
 .banner{background:rgba(245,184,74,.1);border:1px solid rgba(245,184,74,.35);border-radius:16px;padding:12px 16px;font-size:13.5px;line-height:1.5}
 .banner a{color:var(--lime);cursor:pointer;text-decoration:underline}
 .btn{background:var(--lime);color:#111;border:0;border-radius:12px;padding:10px 16px;font-weight:700;cursor:pointer;font-size:14px}
@@ -198,11 +201,24 @@ code{background:var(--panel2);padding:1px 5px;border-radius:5px}
     </div>
 
     <div id="locked" hidden>
-      <div class="card" id="signin">
-        <h3>Sign in</h3>
-        <p class="cap">Your diesel readings are kept in your Firebase project, so you need to sign in to see or record them. Use the email and password you created under Authentication in Firebase.</p>
-        <div class="formrow"><input type="email" id="siEmail" placeholder="Email" autocomplete="username"><input type="password" id="siPass" placeholder="Password" autocomplete="current-password"><button class="btn" id="siBtn">Sign in</button></div>
-        <div class="cap" id="siMsg" style="margin-top:8px"></div>
+      <div class="card" id="signin" style="max-width:560px">
+        <div class="seg" id="authTabs" style="width:max-content;margin-bottom:14px"><button class="on" data-m="in">Sign in</button><button data-m="up">Create account</button></div>
+        <h3 id="authTitle">Sign in</h3>
+        <p class="cap" id="authCap">Sign in with your email and password.</p>
+        <div class="authform">
+          <input type="email" id="siEmail" placeholder="Email" autocomplete="username">
+          <input type="password" id="siPass" placeholder="Password" autocomplete="current-password">
+          <input type="password" id="siPass2" placeholder="Confirm password" autocomplete="new-password" hidden>
+          <button class="btn" id="siBtn">Sign in</button>
+        </div>
+        <div class="formrow" style="justify-content:space-between"><span class="cap" id="siMsg"></span><button class="delbtn" id="forgotBtn">Forgot password?</button></div>
+      </div>
+    </div>
+    <div id="pending" hidden>
+      <div class="card" style="max-width:560px">
+        <h3>Waiting for approval</h3>
+        <p class="cap" id="pendCap">Your account has been created. The admin needs to approve it before you can see the diesel data. This page opens by itself once you're approved.</p>
+        <div class="formrow"><button class="btn ghost" id="pendOut">Sign out</button></div>
       </div>
     </div>
     <div class="card" id="emptyDash" hidden>
@@ -240,9 +256,9 @@ code{background:var(--panel2);padding:1px 5px;border-radius:5px}
         <details class="sub2" id="fbSetup"><summary>Connect Firebase</summary>
           <ol class="steps">
             <li>In the <b>Firebase console</b>, open your project (or create one), then <b>Build → Firestore Database → Create database</b>.</li>
-            <li><b>Build → Authentication → Sign-in method</b>: turn on <b>Email/Password</b>, then under <b>Users</b> add yourself, plus one account for each viewer (or one shared viewer account).</li>
+            <li><b>Build → Authentication → Sign-in method</b>: turn on <b>Email/Password</b>, then under <b>Users</b> add yourself. Other people create their own accounts from the sign-in page and you approve them in Settings → People.</li>
             <li><b>Project settings → Your apps → Web app (&lt;/&gt;)</b>, copy the <code>firebaseConfig</code> block and paste it below.</li>
-            <li>In <b>Firestore → Rules</b>, paste the rules below (put <b>your</b> User UID from the Users tab in place of ADMIN_UID) and publish. Then, under <b>Authentication → Settings → User actions</b>, untick <b>Enable create (sign-up)</b> so only people you add can sign in.</li>
+            <li>In <b>Firestore → Rules</b>, paste the rules below and publish. If you are signed in, your User UID is already filled in; otherwise put it in place of ADMIN_UID. Keep <b>Authentication → Settings → User actions → Enable create (sign-up)</b> ticked so people can create accounts; they still need your approval to see anything.</li>
           </ol>
           <textarea id="fbCfg" rows="8" placeholder="const firebaseConfig = { apiKey: &quot;...&quot;, authDomain: &quot;...&quot;, projectId: &quot;...&quot;, ... };"></textarea>
           <div class="formrow"><button class="btn" id="fbSave">Save and connect</button><button class="btn ghost" id="fbClear">Disconnect</button><span class="cap" id="fbMsg"></span></div>
@@ -251,14 +267,30 @@ service cloud.firestore {
   match /databases/{database}/documents {
     function signedIn() { return request.auth != null; }
     function isAdmin()  { return signedIn() &amp;&amp; request.auth.uid == "ADMIN_UID"; }
-    // Anyone you've added in Authentication can view; only you can change anything.
-    match /diesel_months/{month}  { allow read: if signedIn(); allow write: if isAdmin(); }
+    function approved() {
+      return isAdmin() || (signedIn() &amp;&amp; request.auth.uid in
+        get(/databases/$(database)/documents/diesel_settings/main).data.get('viewers', []));
+    }
+    // Readings: approved people can view, only the admin can change.
+    match /diesel_months/{month}  { allow read: if approved(); allow write: if isAdmin(); }
+    // Settings (holds the approved list): any signed-in user can read, only the admin can change.
     match /diesel_settings/{doc}  { allow read: if signedIn(); allow write: if isAdmin(); }
+    // Access requests: a new user files their own; only the admin sees them all or removes them.
+    match /diesel_requests/{uid}  {
+      allow read: if isAdmin() || (signedIn() &amp;&amp; request.auth.uid == uid);
+      allow create, update: if signedIn() &amp;&amp; request.auth.uid == uid;
+      allow delete: if isAdmin();
+    }
     match /{document=**}          { allow read, write: if false; }
   }
 }</pre>
         </details>
         <div id="migrate" hidden style="margin-top:12px"></div>
+      </section>
+      <section class="card" id="peopleSec" hidden>
+        <h3>People</h3>
+        <p class="cap">Anyone can create an account from the sign-in page, but they see nothing until you approve them here. Approved people can view everything; only you can record or change readings.</p>
+        <div class="wrap"><table id="peopleTable"><thead><tr><th>Email</th><th>Status</th><th></th></tr></thead><tbody></tbody></table></div>
       </section>
       <section class="card">
         <h3>Diesel history</h3>
@@ -434,7 +466,7 @@ const S={dayDate:null,page:({'#daily':'daily','#overview':'overview','#predictio
 // ---------- storage ----------
 const LS={get:k=>{try{return JSON.parse(localStorage.getItem(k));}catch(e){return null;}},set:(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v));return true;}catch(e){return false;}},del:k=>{try{localStorage.removeItem(k);}catch(e){}}};
 function clean(o){const r={};for(const[k,v]of Object.entries(o)){if(v!==undefined&&v!==null&&v!==''&&!(typeof v==='number'&&!isFinite(v)))r[k]=v;}return r;}
-const MONTHS='diesel_months', SETTINGS='diesel_settings';
+const MONTHS='diesel_months', SETTINGS='diesel_settings', REQUESTS='diesel_requests';
 const Store={mode:'local',user:null,entries:{},settings:{},err:null,loaded:false,
   start(){
     const cfg=window.FIREBASE_CONFIG||LS.get('dz_fb_cfg');
@@ -443,19 +475,29 @@ const Store={mode:'local',user:null,entries:{},settings:{},err:null,loaded:false
         if(!firebase.apps.length)firebase.initializeApp(cfg);
         this.db=firebase.firestore();this.auth=firebase.auth();this.mode='firebase';
         this.db.enablePersistence({synchronizeTabs:true}).catch(()=>{});
-        this.auth.onAuthStateChanged(u=>{this.user=u;if(u)this.listen();else{this.stop();this.entries={};this.settings={};this.loaded=true;onData();}});
+        this.auth.onAuthStateChanged(u=>{this.user=u;this._reqSent=null;if(u){this.listen();}else{this.stop();this.entries={};this.settings={};this.loaded=true;}rebuild();buildFacs();render();});
         return;
       }catch(e){this.err='Could not connect to Firebase: '+e.message;}
     } else if(cfg&&!window.firebase){this.err='Firebase is set up but could not load (no internet?). Showing readings saved in this browser.';}
     this.mode='local';this.entries=LS.get('dz_entries')||{};this.settings=LS.get('dz_settings')||{};this.loaded=true;onData();
   },
-  stop(){(this.unsubs||[]).forEach(f=>f());this.unsubs=[];},
+  stop(){(this.unsubs||[]).forEach(f=>f());this.unsubs=[];this.monthsOn=false;this.reqUnsub=null;this.settingsLoaded=false;this.requests={};},
   listen(){
     this.stop();
     // One document per month holds every reading of that month, so opening the app costs ~2 reads a month of history, not one per reading.
+    this.monthsOn=false;this.reqUnsub=null;
+    this.unsubs.push(this.db.collection(SETTINGS).doc('main').onSnapshot(d=>{this.settings=d.exists?d.data():{};this.settingsLoaded=true;applySettings();this.sync();onData();},err=>{this.settingsLoaded=true;this.sync();onData();}));
+  },
+  approved(){if(this.mode==='local')return true;if(!this.user)return false;const s=this.settings||{};if(!s.admins||!s.admins.length)return true;return this.isAdmin()||(Array.isArray(s.viewers)&&s.viewers.includes(this.user.uid));},
+  pending(){return this.mode==='firebase'&&!!this.user&&!!this.settingsLoaded&&!this.approved();},
+  sync(){
+    if(this.approved()&&!this.monthsOn){this.monthsOn=true;this.startMonths();}
+    if(this.pending()&&this._reqSent!==this.user.uid){this._reqSent=this.user.uid;this.db.collection(REQUESTS).doc(this.user.uid).set({email:this.user.email||'',at:Date.now()},{merge:true}).catch(()=>{});}
+    if(this.isAdmin()&&!this.reqUnsub){this.reqUnsub=this.db.collection(REQUESTS).onSnapshot(sn=>{const r={};sn.forEach(d=>r[d.id]=d.data());this.requests=r;if(S.page==='settings')render();},()=>{});this.unsubs.push(this.reqUnsub);}
+  },
+  startMonths(){
     this.unsubs.push(this.db.collection(MONTHS).onSnapshot(snap=>{const e={};snap.forEach(doc=>{const r=(doc.data()||{}).r||{};for(const[k,v]of Object.entries(r))e[k]=v;});this.entries=e;this.loaded=true;this.err=null;onData();},
-      err=>{this.err='Firebase refused the read: '+err.message+' (check the Firestore rules).';this.loaded=true;onData();}));
-    this.unsubs.push(this.db.collection(SETTINGS).doc('main').onSnapshot(d=>{this.settings=d.exists?d.data():{};applySettings();onData();},()=>{}));
+      err=>{this.monthsOn=false;this.err='Firebase refused the read: '+err.message+' (check the Firestore rules).';this.loaded=true;onData();}));
   },
   async save(rec){
     const id=rec.d+'_'+rec.g,data=clean({...rec,ts:Date.now()});
@@ -701,8 +743,8 @@ function render(){
   if(viewer&&(S.page==='record'||(S.page==='settings'&&(Store.settings||{}).admins)))S.page='daily';
   document.getElementById('goImport').hidden=!admin;
   const ac=document.getElementById('acct');ac.hidden=!(Store.mode==='firebase'&&Store.user);
-  if(!ac.hidden){const r=document.getElementById('acctRole');r.textContent=admin?'Admin':'View only';r.className=admin?'adm':'view';setText('acctEmail',Store.user.email||'');}
-  const lk=Store.locked();document.getElementById('locked').hidden=!lk;
+  if(!ac.hidden){const r=document.getElementById('acctRole');r.textContent=admin?'Admin':Store.pending()?'Awaiting approval':'View only';r.className=admin?'adm':'view';setText('acctEmail',Store.user.email||'');}
+  const pend=Store.pending();const lk=Store.locked()||pend;document.getElementById('locked').hidden=!Store.locked();document.getElementById('pending').hidden=!pend;
   const empty=!lk&&!daily.length&&(S.page==='overview'||S.page==='predict'||S.page==='daily');document.getElementById('emptyDash').hidden=!empty;
   for(const p of Object.keys(PAGES))document.getElementById('pg-'+p).hidden=lk||empty||S.page!==p;
   document.querySelectorAll('.pg').forEach(b=>b.classList.toggle('on',b.dataset.p===S.page));
@@ -710,7 +752,8 @@ function render(){
   const dash=S.page==='overview'||S.page==='predict';
   document.getElementById('basis').style.display=dash?'':'none';
   document.querySelectorAll('.fac:not(.pg)').forEach(b=>b.classList.toggle('on',(b.dataset.f||null)===S.fac));
-  if(lk){setText('title','Vestates diesel');setText('sub','Sign in to continue');return;}
+  document.body.classList.toggle('locked',lk);
+  if(lk){setText('crumb',pend?'Account':'Welcome');setText('title','Vestates diesel');setText('sub',pend?'Signed in as '+(Store.user&&Store.user.email||''):'Sign in or create an account to continue');return;}
   if(empty){setText('title',S.fac||'All facilities');setText('sub','');return;}
   if(S.page==='record'){setText('title','Daily readings');setText('sub',Store.mode==='firebase'?(Store.user?'Saved to Firebase as '+Store.user.email:'Not signed in'):'Saved in this browser');renderRecord();return;}
   if(S.page==='daily'){renderDaily();return;}
@@ -919,12 +962,26 @@ function renderSettings(){
   const s=document.getElementById('stStatus');
   if(Store.mode==='firebase')s.textContent=Store.user?`Connected to Firebase project "${(firebase.app().options||{}).projectId}" and signed in as ${Store.user.email}. Readings sync across your devices.`:`Connected to Firebase project "${(firebase.app().options||{}).projectId}". Sign in on the Record page to start saving.`;
   else s.textContent=(Store.err?Store.err+' ':'')+'Readings are saved in this browser only. If you clear your browser data they are lost, so connect Firebase or download backups regularly.';
+  const ps=document.getElementById('peopleSec');ps.hidden=!(Store.mode==='firebase'&&Store.isAdmin());
+  if(!ps.hidden){const st=Store.settings||{},viewers=st.viewers||[],emails=st.viewerEmails||{},req=Store.requests||{};
+    const rows=[...Object.entries(req).filter(([u])=>!viewers.includes(u)&&!(st.admins||[]).includes(u)).map(([u,v])=>({u,email:v.email,st:'pending'})),...viewers.map(u=>({u,email:emails[u]||(req[u]&&req[u].email)||u,st:'ok'}))];
+    const tb=document.querySelector('#peopleTable tbody');
+    if(!rows.length){const tr=document.createElement('tr'),td=document.createElement('td');td.colSpan=3;td.style.color='var(--mut)';td.textContent='No one else yet. Share the app link; when someone creates an account they appear here.';tr.appendChild(td);tb.replaceChildren(tr);}
+    else tb.replaceChildren(...rows.map(p=>{const tr=document.createElement('tr');const c=v=>{const td=document.createElement('td');if(v instanceof Node)td.appendChild(v);else td.textContent=v;tr.appendChild(td);return td;};
+      c(p.email||'—');c(tag(p.st==='ok'?'Can view':'Waiting for approval',p.st==='ok'?'ok':'warn'));
+      const box=document.createElement('span');box.style.display='inline-flex';box.style.gap='8px';
+      const mk=(t,cls,fn)=>{const b=document.createElement('button');b.className=cls;b.textContent=t;b.onclick=async()=>{b.disabled=true;try{await fn();}catch(e){b.disabled=false;b.textContent='Failed';}};return b;};
+      if(p.st==='pending'){box.append(mk('Approve','btn small',async()=>{await Store.saveSettings({viewers:[...new Set([...viewers,p.u])],viewerEmails:{...emails,[p.u]:p.email||''}});}),mk('Decline','delbtn',async()=>{await Store.db.collection(REQUESTS).doc(p.u).delete();}));}
+      else box.append(mk('Remove access','delbtn',async()=>{await Store.saveSettings({viewers:viewers.filter(x=>x!==p.u)});}));
+      c(box);return tr;}));
+  }
+  const rp=document.getElementById('rules');if(rp&&Store.user&&(!(Store.settings||{}).admins||Store.isAdmin()))rp.textContent=rp.textContent.replace('ADMIN_UID',Store.user.uid);
   const ab=document.getElementById('adminBox');ab.replaceChildren();
   if(Store.mode==='firebase'&&Store.user){
     const adm=(Store.settings||{}).admins;
     if(!adm||!adm.length){const p=document.createElement('p');p.className='cap';p.textContent='No admin is set yet. Click below to make this account ('+Store.user.email+') the only one that can record readings and change settings. Everyone else you add will be view-only.';const b=document.createElement('button');b.className='btn';b.textContent='Make me the admin';
       b.onclick=async()=>{b.disabled=true;try{await Store.saveSettings({admins:[Store.user.uid]});}catch(e){p.textContent='Could not save: '+e.message+' Check the ADMIN_UID in your rules is this account\'s UID: '+Store.user.uid;b.disabled=false;}};ab.append(p,b);}
-    else{const p=document.createElement('p');p.className='cap';p.textContent=Store.isAdmin()?`You (${Store.user.email}) are the admin. Anyone else you add under Firebase → Authentication → Users can sign in and view, but can't record or change anything.`:'You are signed in as a viewer.';ab.append(p);}
+    else{const p=document.createElement('p');p.className='cap';p.textContent=Store.isAdmin()?`You (${Store.user.email}) are the admin. Other people create an account on the sign-in page and appear under People below for you to approve. Approved people can view everything but can't record or change anything.`:'You are signed in as a viewer.';ab.append(p);}
     const u=document.createElement('p');u.className='cap';u.textContent='Your User UID: '+Store.user.uid;ab.append(u);
   }
   document.getElementById('fbSetup').open=Store.mode!=='firebase'&&!LS.get('dz_fb_cfg');
@@ -977,8 +1034,19 @@ document.getElementById('dPrev').onclick=()=>shiftDay(-1);
 document.getElementById('dNext').onclick=()=>{if(S.recDate<iso(Date.now()))shiftDay(1);};
 document.getElementById('recDate').onchange=e=>{if(!e.target.value)return;const anyDirty=Object.values(cardState).some(c=>c.dirty);if(anyDirty&&!confirm('You have unsaved readings on this date. Leave without saving?')){e.target.value=S.recDate;return;}S.recDate=e.target.value;renderRecord(true);};
 document.getElementById('saveAll').onclick=saveAll;
-document.getElementById('siBtn').onclick=async()=>{const m=document.getElementById('siMsg');m.textContent='Signing in…';try{await Store.auth.signInWithEmailAndPassword(document.getElementById('siEmail').value.trim(),document.getElementById('siPass').value);m.textContent='';}catch(e){m.textContent=e.code==='auth/invalid-credential'||e.code==='auth/wrong-password'?'Wrong email or password.':e.message;}};
-document.getElementById('siPass').addEventListener('keydown',e=>{if(e.key==='Enter')document.getElementById('siBtn').click();});
+let authMode='in';
+document.querySelectorAll('#authTabs button').forEach(b=>b.onclick=()=>{authMode=b.dataset.m;document.querySelectorAll('#authTabs button').forEach(x=>x.classList.toggle('on',x===b));
+  const up=authMode==='up';setText('authTitle',up?'Create an account':'Sign in');setText('authCap',up?'Use your work email and choose a password (at least 6 characters). The admin will need to approve you before you can see the data.':'Sign in with your email and password.');
+  document.getElementById('siPass2').hidden=!up;document.getElementById('siBtn').textContent=up?'Create account':'Sign in';document.getElementById('siPass').autocomplete=up?'new-password':'current-password';setText('siMsg','');});
+const authErr=e=>({'auth/invalid-credential':'Wrong email or password.','auth/wrong-password':'Wrong email or password.','auth/user-not-found':'No account with that email. Use Create account.','auth/email-already-in-use':'That email already has an account. Use Sign in.','auth/weak-password':'Password must be at least 6 characters.','auth/invalid-email':'That email address is not valid.','auth/operation-not-allowed':'Account creation is turned off in Firebase (Authentication, Settings, User actions).','auth/too-many-requests':'Too many tries. Wait a few minutes.'})[e.code]||e.message;
+document.getElementById('siBtn').onclick=async()=>{const m=document.getElementById('siMsg'),em=document.getElementById('siEmail').value.trim(),pw=document.getElementById('siPass').value;
+  if(!em||!pw){m.textContent='Enter your email and password.';return;}
+  try{if(authMode==='up'){if(pw!==document.getElementById('siPass2').value){m.textContent='The passwords do not match.';return;}m.textContent='Creating your account…';await Store.auth.createUserWithEmailAndPassword(em,pw);}
+    else{m.textContent='Signing in…';await Store.auth.signInWithEmailAndPassword(em,pw);}m.textContent='';}catch(e){m.textContent=authErr(e);}};
+['siPass','siPass2'].forEach(id=>document.getElementById(id).addEventListener('keydown',e=>{if(e.key==='Enter')document.getElementById('siBtn').click();}));
+document.getElementById('forgotBtn').onclick=async()=>{const m=document.getElementById('siMsg'),em=document.getElementById('siEmail').value.trim();if(!em){m.textContent='Type your email above first, then tap Forgot password.';return;}
+  try{await Store.auth.sendPasswordResetEmail(em);m.textContent='Password reset email sent to '+em+'. Check your inbox (and spam).';}catch(e){m.textContent=authErr(e);}};
+document.getElementById('pendOut').onclick=()=>{document.getElementById('siPass').value='';Store.auth&&Store.auth.signOut();};
 document.getElementById('acctOut').onclick=()=>{const pw=document.getElementById('siPass');if(pw)pw.value='';Store.auth&&Store.auth.signOut();};
 document.getElementById('fbSave').onclick=()=>{const m=document.getElementById('fbMsg');try{const o=parseCfg(document.getElementById('fbCfg').value);LS.set('dz_fb_cfg',o);m.textContent='Saved. Reloading…';setTimeout(()=>location.reload(),600);}catch(e){m.textContent=e.message;}};
 document.getElementById('fbClear').onclick=()=>{LS.del('dz_fb_cfg');location.reload();};
